@@ -1,11 +1,13 @@
 import { useState, useCallback } from 'react';
-import { FileDown, Sparkles, BookOpen, Shield } from 'lucide-react';
+import { FileDown, Sparkles, BookOpen, Shield, Eye, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { FileUpload } from '@/components/FileUpload';
 import { FormatOptions, ABNTOptions } from '@/components/FormatOptions';
 import { DocumentPreview } from '@/components/DocumentPreview';
 import { FiguresList, Figure } from '@/components/FiguresList';
 import { ProcessingStatus, ProcessingStep } from '@/components/ProcessingStatus';
+import { DocumentPreviewModal } from '@/components/DocumentPreviewModal';
+import { generatePDF, downloadPDFFromHtml } from '@/lib/pdf-service';
 import { toast } from 'sonner';
 
 const defaultOptions: ABNTOptions = {
@@ -30,10 +32,16 @@ export default function Index() {
   const [options, setOptions] = useState<ABNTOptions>(defaultOptions);
   const [figures, setFigures] = useState<Figure[]>([]);
   const [processingStep, setProcessingStep] = useState<ProcessingStep>('idle');
+  const [generatedHtml, setGeneratedHtml] = useState<string | null>(null);
+  const [pdfFilename, setPdfFilename] = useState<string>('');
+  const [showPreviewModal, setShowPreviewModal] = useState(false);
+  const [isDownloading, setIsDownloading] = useState(false);
 
   const handleFileSelect = useCallback((file: File) => {
     setSelectedFile(file);
-    setFigures(mockFigures); // In real app, would detect figures from document
+    setFigures(mockFigures);
+    setGeneratedHtml(null);
+    setProcessingStep('idle');
     toast.success('Documento carregado com sucesso!');
   }, []);
 
@@ -41,6 +49,7 @@ export default function Index() {
     setSelectedFile(null);
     setFigures([]);
     setProcessingStep('idle');
+    setGeneratedHtml(null);
   }, []);
 
   const updateFigureCaption = useCallback((id: number, caption: string) => {
@@ -52,27 +61,61 @@ export default function Index() {
   const handleConvert = async () => {
     if (!selectedFile) return;
 
-    const steps: ProcessingStep[] = ['reading', 'detecting', 'formatting', 'generating', 'complete'];
-    
-    for (const step of steps) {
-      setProcessingStep(step);
-      await new Promise(resolve => setTimeout(resolve, 1200));
-    }
+    try {
+      // Simulate processing steps
+      setProcessingStep('reading');
+      await new Promise(resolve => setTimeout(resolve, 800));
+      
+      setProcessingStep('detecting');
+      await new Promise(resolve => setTimeout(resolve, 800));
+      
+      setProcessingStep('formatting');
+      await new Promise(resolve => setTimeout(resolve, 800));
+      
+      setProcessingStep('generating');
+      
+      // Call the edge function
+      const result = await generatePDF(selectedFile.name, options, figures);
+      
+      setGeneratedHtml(result.html);
+      setPdfFilename(result.filename);
+      setProcessingStep('complete');
 
-    toast.success('PDF gerado com sucesso!', {
-      description: 'Clique no botão de download para baixar.',
-    });
+      toast.success('PDF gerado com sucesso!', {
+        description: 'Clique em "Visualizar" ou "Baixar" para acessar o documento.',
+      });
+    } catch (error) {
+      console.error('Error converting:', error);
+      toast.error('Erro ao converter documento', {
+        description: error instanceof Error ? error.message : 'Tente novamente',
+      });
+      setProcessingStep('idle');
+    }
   };
 
-  const handleDownload = () => {
-    // In real app, would download the generated PDF
-    toast.info('Em uma implementação real, o PDF seria baixado aqui.');
+  const handlePreview = () => {
+    setShowPreviewModal(true);
+  };
+
+  const handleDownload = async () => {
+    if (!generatedHtml) return;
+    
+    setIsDownloading(true);
+    try {
+      await downloadPDFFromHtml(generatedHtml, pdfFilename);
+      toast.success('Download iniciado!');
+    } catch (error) {
+      console.error('Download error:', error);
+      toast.error('Erro ao baixar PDF');
+    } finally {
+      setIsDownloading(false);
+    }
   };
 
   return (
     <div className="min-h-screen bg-background">
       {/* Header */}
-      <header className="bg-card border-b border-border sticky top-0 z-50 backdrop-blur-sm bg-card/95">
+      <header className="bg-card border-b border-border sticky top-0 z-40 backdrop-blur-sm bg-card/95">
         <div className="container max-w-6xl mx-auto px-4 py-4">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
@@ -144,15 +187,44 @@ export default function Index() {
                     Converter para PDF
                   </Button>
                 ) : processingStep === 'complete' ? (
-                  <Button 
-                    variant="success" 
-                    size="xl" 
-                    className="w-full"
-                    onClick={handleDownload}
-                  >
-                    <FileDown className="w-5 h-5" />
-                    Baixar PDF Formatado
-                  </Button>
+                  <div className="space-y-3">
+                    <div className="grid grid-cols-2 gap-3">
+                      <Button 
+                        variant="outline" 
+                        size="lg" 
+                        className="w-full"
+                        onClick={handlePreview}
+                      >
+                        <Eye className="w-5 h-5" />
+                        Visualizar
+                      </Button>
+                      <Button 
+                        variant="success" 
+                        size="lg" 
+                        className="w-full"
+                        onClick={handleDownload}
+                        disabled={isDownloading}
+                      >
+                        {isDownloading ? (
+                          <Loader2 className="w-5 h-5 animate-spin" />
+                        ) : (
+                          <FileDown className="w-5 h-5" />
+                        )}
+                        Baixar PDF
+                      </Button>
+                    </div>
+                    <Button 
+                      variant="ghost" 
+                      size="sm" 
+                      className="w-full text-muted-foreground"
+                      onClick={() => {
+                        setProcessingStep('idle');
+                        setGeneratedHtml(null);
+                      }}
+                    >
+                      Converter novamente
+                    </Button>
+                  </div>
                 ) : null}
               </>
             )}
@@ -162,7 +234,7 @@ export default function Index() {
           <div className="space-y-6">
             {selectedFile ? (
               <>
-                {processingStep !== 'idle' && (
+                {processingStep !== 'idle' && processingStep !== 'complete' && (
                   <ProcessingStatus currentStep={processingStep} />
                 )}
                 <DocumentPreview 
@@ -228,6 +300,16 @@ export default function Index() {
           <p>ABNT Formatter — Conversão de documentos seguindo normas brasileiras</p>
         </div>
       </footer>
+
+      {/* Preview Modal */}
+      <DocumentPreviewModal
+        isOpen={showPreviewModal}
+        onClose={() => setShowPreviewModal(false)}
+        fileName={selectedFile?.name || ''}
+        options={options}
+        figures={figures}
+        htmlContent={generatedHtml || undefined}
+      />
     </div>
   );
 }
